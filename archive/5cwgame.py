@@ -1,0 +1,161 @@
+﻿import tkinter as tk
+import random
+import time
+from pynput import mouse
+
+# グローバル変数
+CHARACTER_FONT_SIZE = 35
+CHARACTER_SPAWN_INTERVAL_MIN = 3000
+CHARACTER_SPAWN_INTERVAL_MAX = 5000
+MORSE_CHECK_TIMEOUT = 800 # マウス無入力タイマー（ms）
+SCORE_FONT_SIZE = 40 # スコアフォントサイズ
+FALLING_SPEED = 1 # 落下の速さ
+
+# モールスコード辞書
+morse_code_dict = {
+    'A': '・－', 'B': '－・・・', 'C': '－・－・', 'D': '－・・', 'E': '・', 'F': '・・－・',
+    'G': '－－・', 'H': '・・・・', 'I': '・・', 'J': '・－－－', 'K': '－・－', 'L': '・－・・',
+    'M': '－－', 'N': '－・', 'O': '－－－', 'P': '・－－・', 'Q': '－－・－', 'R': '・－・',
+    'S': '・・・', 'T': '－', 'U': '・・－', 'V': '・・・－', 'W': '・－－', 'X': '－・・－',
+    'Y': '－・－－', 'Z': '－－・・',
+    '1': '・－－－－', '2': '・・－－－', '3': '・・・－－', '4': '・・・・－', '5': '・・・・・',
+    '6': '－・・・・', '7': '－－・・・', '8': '－－－・・', '9': '－－－－・', '0': '－－－－－',
+}
+
+class Character:
+    def __init__(self, canvas, alphabet, morse_code):
+        self.canvas = canvas
+        self.alphabet = alphabet
+        self.morse_code = morse_code
+        self.speed = FALLING_SPEED
+        
+
+        # テキストオブジェクトを生成（位置は一旦(0,0)で生成）
+        self.alphabet_text = canvas.create_text(0, 0, text=alphabet, font=("Helvetica", CHARACTER_FONT_SIZE), anchor='s')
+        self.morse_code_text = canvas.create_text(0, 0, text=morse_code, font=("Helvetica", CHARACTER_FONT_SIZE), anchor='n', justify='center')
+
+        # 全体の幅を取得
+        alphabet_bbox = canvas.bbox(self.alphabet_text)
+        morse_code_bbox = canvas.bbox(self.morse_code_text)
+        total_width = max(alphabet_bbox[2] - alphabet_bbox[0], morse_code_bbox[2] - morse_code_bbox[0])
+
+        # 初期x座標をランダムに決定
+        self.x = random.randint(0, 599)
+
+        # x座標がはみ出していないかチェックし、必要に応じて調整
+        if self.x + total_width / 2 > 600:  # 右端からはみ出す場合
+            self.x = 600 - int(total_width/2)
+        elif self.x - total_width / 2 < 0:    # 左端からはみ出す場合
+            self.x = int(total_width/2)
+
+        # 最終的な位置にテキストオブジェクトを移動
+        self.canvas.move(self.alphabet_text, self.x - (alphabet_bbox[0]+alphabet_bbox[2])/2, 0) # 初期位置からのオフセットを考慮
+        self.canvas.move(self.morse_code_text, self.x - (morse_code_bbox[0]+morse_code_bbox[2])/2, 0) # 初期位置からのオフセットを考慮
+        
+        # テキストオブジェクトをグループ化
+        self.text_group = [self.alphabet_text, self.morse_code_text]
+        self.y = 0
+        self.passed_line = False
+
+    def move(self):
+        self.y += self.speed
+        for text_id in self.text_group:
+            self.canvas.move(text_id, 0, self.speed)
+
+        if self.y > 870 and not self.passed_line:
+            self.passed_line = True
+
+class Game:
+    def __init__(self, root):
+        self.root = root
+        self.canvas = tk.Canvas(root, width=600, height=900)
+        self.canvas.pack()
+        self.score = 0
+        self.score_text = self.canvas.create_text(300, SCORE_FONT_SIZE, text=f"Score: {self.score:03d}", font=("MS Gothic", SCORE_FONT_SIZE ), anchor=tk.CENTER)
+        self.line = self.canvas.create_line(0, 870, 600, 870, fill="red", width=3)
+        self.characters = []
+        self.current_morse = ""
+        self.last_click_time = 0
+        self.next_char_spawn_time = 0
+        self.click_start_time = 0 #追加
+        self.listener = mouse.Listener(on_click=self.on_click)
+        self.listener.start()
+        self.current_morse_display = self.canvas.create_text(300, 800, text="", font=("Helvetica", 30), anchor=tk.CENTER)
+        self.x_mark = None
+        self.root.after(100, self.game_loop)
+
+    def generate_character(self):
+        alphabet = random.choice(list(morse_code_dict.keys()))
+        morse_code = morse_code_dict[alphabet]
+        char = Character(self.canvas, alphabet, morse_code)
+        self.characters.append(char)
+
+        interval = random.randint(CHARACTER_SPAWN_INTERVAL_MIN, CHARACTER_SPAWN_INTERVAL_MAX)
+        self.next_char_spawn_time = time.time() * 1000 + interval
+
+    def game_loop(self):
+        if time.time() * 1000 >= self.next_char_spawn_time or not self.characters:
+            self.generate_character()
+        self.update()
+        self.root.after(30, self.game_loop)
+
+    def update(self):
+        for char in list(self.characters):
+            char.move()
+            if char.y > 900:
+                self.canvas.delete(char.text_group[0])
+                self.canvas.delete(char.text_group[1])
+                self.characters.remove(char)
+
+    def check_timeout(self):
+        if time.time() - self.last_click_time > MORSE_CHECK_TIMEOUT / 1000:
+            self.process_morse_code()
+
+    def on_click(self, x, y, button, pressed):
+        if button == mouse.Button.left:  # 左ボタンのみ反応
+            if pressed:
+                self.click_start_time = time.time()
+            else:
+                elapsed_time = time.time() - self.click_start_time
+                if elapsed_time < 0.3:
+                    self.current_morse += "・"
+                else:
+                    self.current_morse += "－"
+                self.canvas.itemconfig(self.current_morse_display, text=self.current_morse)
+                self.last_click_time = time.time()
+                self.root.after(2000, self.check_timeout)
+
+
+    def process_morse_code(self):
+        if self.current_morse:
+            matched = False
+            for char in list(self.characters):
+                if char.morse_code == self.current_morse and not char.passed_line:
+                    self.canvas.delete(char.text_group[0])
+                    self.canvas.delete(char.text_group[1])
+                    self.characters.remove(char)
+                    self.score += 1
+                    self.canvas.itemconfig(self.score_text, text=f"Score: {self.score:03d}")
+                    matched = True
+                    break
+            if not matched:
+                self.show_x_mark()
+            self.current_morse = ""
+            self.canvas.itemconfig(self.current_morse_display, text="")
+
+    def show_x_mark(self):
+        if self.x_mark:
+            self.canvas.delete(self.x_mark)
+        self.x_mark = self.canvas.create_text(300, 450, text="×", font=("MS Gothic", 70), fill="red", anchor=tk.CENTER) 
+        self.root.after(1000, self.hide_x_mark)
+
+    def hide_x_mark(self):
+        if self.x_mark:
+            self.canvas.delete(self.x_mark)
+            self.x_mark = None # ここまで
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    root.title("Morse Game")
+    game = Game(root)
+    root.mainloop()

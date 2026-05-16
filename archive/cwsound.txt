@@ -1,0 +1,110 @@
+﻿import tkinter as tk
+import time
+import numpy as np
+import pyaudio
+from pynput import mouse
+import threading
+import logging
+
+logging.basicConfig(filename='morse_tester.log', level=logging.DEBUG,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
+logging.debug("プログラム開始")
+
+# グローバル変数
+MORSE_CHECK_TIMEOUT = 2000
+# 正弦波生成パラメータ
+SAMPLE_RATE = 44100
+FREQUENCY = 800
+DURATION = 0.1
+LONG_DURATION = 0.3
+
+class MorseTester:
+    def __init__(self, root):
+        self.root = root
+        self.click_start_time = 0
+        self.last_click_time = 0
+        self.current_morse = ""
+
+        try:
+            self.p = pyaudio.PyAudio()
+            self.stream = self.p.open(format=pyaudio.paFloat32,
+                                    channels=1,
+                                    rate=SAMPLE_RATE,
+                                    output=True)
+            logging.debug("pyaudio初期化成功")
+        except Exception as e:
+            logging.error(f"pyaudioの初期化エラー: {e}")
+            print(f"pyaudioの初期化エラー: {e}")
+            root.destroy()
+            return
+
+        self.listener = mouse.Listener(on_click=self.on_click)
+        self.listener.daemon = True
+        self.listener.start()
+        logging.debug("マウスリスナースタート")
+        print("テスト開始。マウスをクリックしてください。")
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def play_sine_wave(self, duration):
+        samples = (np.sin(2*np.pi*np.arange(SAMPLE_RATE*duration)*FREQUENCY/SAMPLE_RATE)).astype(np.float32)
+        self.stream.write(samples)
+
+    def check_timeout(self):
+        if time.time() - self.last_click_time > MORSE_CHECK_TIMEOUT / 1000:
+            self.process_morse_code()
+
+    def on_click(self, x, y, button, pressed):
+        if button == mouse.Button.left:
+            if pressed:
+                self.click_start_time = time.time()
+            else:
+                elapsed_time = time.time() - self.click_start_time
+                if elapsed_time < 0.3:
+                    self.current_morse += "・"
+                    self.play_sine_wave(DURATION)
+                else:
+                    self.current_morse += "－"
+                    self.play_sine_wave(LONG_DURATION)
+                self.last_click_time = time.time()
+                print(f"入力された符号: {self.current_morse}")
+                time.sleep(0.05)
+
+    def process_morse_code(self):
+        if self.current_morse:
+            print(f"確定した符号: {self.current_morse}")
+            self.current_morse = ""
+
+    def on_closing(self):
+        self.terminate()
+        self.root.destroy()
+
+    def terminate(self):
+        if hasattr(self, 'stream') and self.stream is not None:
+            self.stream.stop_stream()
+            self.stream.close()
+            logging.debug("pyaudioストリーム停止")
+        if hasattr(self, 'p') and self.p is not None:
+            self.p.terminate()
+            logging.debug("pyaudio終了")
+        if hasattr(self, 'listener') and self.listener is not None:
+            self.listener.stop()
+            logging.debug("マウスリスナー停止")
+        print("テスト終了。")
+        logging.debug("プログラム終了")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    root.title("Morse Tester")
+    try:
+        tester = MorseTester(root)
+        if hasattr(tester, 'root'): #pyaudioの初期化に成功した場合のみmainloopを実行
+          root.mainloop()
+    except Exception as e:
+        logging.error(f"予期せぬエラー: {e}")
+        print(f"予期せぬエラー: {e}")
+    finally:
+      try:
+        tester.terminate()
+      except AttributeError:
+        pass
