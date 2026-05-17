@@ -1,5 +1,5 @@
 # *********************************************
-# CWGAME Ver.1.0 by JA1XPM 2026.05.17
+# CWGAME Ver.1.1 by JA1XPM 2026.05.17
 # *********************************************
 
 import tkinter as tk
@@ -14,6 +14,10 @@ CHARACTER_SPAWN_INTERVAL_MAX = 5000
 MORSE_CHECK_TIMEOUT = 800  # マウス無入力タイマー（ms）
 SCORE_FONT_SIZE = 40  # スコアフォントサイズ
 FALLING_SPEED = 1  # 落下の速さ
+DEFAULT_CANVAS_WIDTH = 600
+DEFAULT_CANVAS_HEIGHT = 700
+LINE_BOTTOM_MARGIN = 30
+RESIZE_RESET_DELAY = 300  # ウィンドウサイズ変更後のリセット待ち時間（ms）
 
 # モールスコード辞書
 morse_code_dict = {
@@ -28,7 +32,7 @@ morse_code_dict = {
 
 
 class Character:
-    def __init__(self, canvas, alphabet, morse_code):
+    def __init__(self, canvas, alphabet, morse_code, game_width):
         self.canvas = canvas
         self.alphabet = alphabet
         self.morse_code = morse_code
@@ -44,14 +48,10 @@ class Character:
         morse_code_bbox = canvas.bbox(self.morse_code_text)
         total_width = max(alphabet_bbox[2] - alphabet_bbox[0], morse_code_bbox[2] - morse_code_bbox[0])
 
-        # 初期x座標をランダムに決定
-        self.x = random.randint(0, 599)
-
-        # x座標がはみ出していないかチェックし、必要に応じて調整
-        if self.x + total_width / 2 > 600:  # 右端からはみ出す場合
-            self.x = 600 - int(total_width / 2)
-        elif self.x - total_width / 2 < 0:  # 左端からはみ出す場合
-            self.x = int(total_width / 2)
+        # 初期x座標を現在のゲームエリア幅に合わせて決定
+        half_width = max(1, int(total_width / 2))
+        right_limit = max(half_width, int(game_width) - half_width)
+        self.x = random.randint(half_width, right_limit)
 
         # 最終的な位置にテキストオブジェクトを移動
         self.canvas.move(self.alphabet_text, self.x - (alphabet_bbox[0] + alphabet_bbox[2]) / 2,
@@ -64,12 +64,12 @@ class Character:
         self.y = 0
         self.passed_line = False
 
-    def move(self):
+    def move(self, line_y):
         self.y += self.speed
         for text_id in self.text_group:
             self.canvas.move(text_id, 0, self.speed)
 
-        if self.y > 670 and not self.passed_line:
+        if self.y > line_y and not self.passed_line:
             self.passed_line = True
 
 
@@ -83,12 +83,17 @@ class Game:
         self.root.columnconfigure(1, weight=0)  # Add a column for the exit button
         
 
-        self.canvas = tk.Canvas(root, width=600, height=700)
+        self.game_width = DEFAULT_CANVAS_WIDTH
+        self.game_height = DEFAULT_CANVAS_HEIGHT
+        self.resize_reset_id = None
+        self.resize_reset_enabled = False
+
+        self.canvas = tk.Canvas(root, width=DEFAULT_CANVAS_WIDTH, height=DEFAULT_CANVAS_HEIGHT)
         self.canvas.grid(row=0, column=0, sticky="nsew")  # Make canvas expand with window
         self.score = 0
-        self.score_text = self.canvas.create_text(300, SCORE_FONT_SIZE, text=f"Score: {self.score:03d}",
+        self.score_text = self.canvas.create_text(self.center_x(), SCORE_FONT_SIZE, text=f"Score: {self.score:03d}",
                                                   font=("MS Gothic", SCORE_FONT_SIZE), anchor=tk.CENTER)
-        self.line = self.canvas.create_line(0, 670, 600, 670, fill="red", width=3)
+        self.line = self.canvas.create_line(0, self.line_y(), self.game_width, self.line_y(), fill="red", width=3)
         self.characters = []
         self.current_morse = ""
         self.last_click_time = 0
@@ -96,23 +101,65 @@ class Game:
         self.click_start_time = 0  # 追加
         self.listener = mouse.Listener(on_click=self.on_click)
         self.listener.start()
-        self.current_morse_display = self.canvas.create_text(300, 600, text="", font=("Helvetica", 30),
+        self.current_morse_display = self.canvas.create_text(self.center_x(), self.morse_display_y(), text="", font=("Helvetica", 30),
                                                              anchor=tk.CENTER)
         self.x_mark = None
+        self.canvas.bind("<Configure>", self.on_canvas_configure)
+        self.root.after_idle(self.enable_resize_reset)
         self.root.after(100, self.game_loop)
         # キャンバスにリスタートボタンを作成
-        self.restart_button = tk.Button(self.canvas, text="ﾘｽﾀｰﾄ", command=self.restart)
+        self.restart_button = tk.Button(self.canvas, text="ﾘｽﾀｰﾄ", command=self.restart,
+                                        font=("MS Gothic", 14), width=8, height=2)
         self.restart_button_window = self.canvas.create_window(0, 0, anchor=tk.NW, window=self.restart_button)
 
 
         # 終了ボタンを画面右上に追加
-        self.exit_button = tk.Button(root, text="終了", command=root.quit)
+        self.exit_button = tk.Button(root, text="終了", command=root.quit,
+                                     font=("MS Gothic", 14), width=6, height=2)
         self.exit_button.grid(row=0, column=1, sticky="ne")
+
+    def center_x(self):
+        return self.game_width / 2
+
+    def center_y(self):
+        return self.game_height / 2
+
+    def line_y(self):
+        return max(0, self.game_height - LINE_BOTTOM_MARGIN)
+
+    def morse_display_y(self):
+        return max(SCORE_FONT_SIZE * 2, self.game_height - 100)
+
+    def layout_game_area(self):
+        self.canvas.coords(self.score_text, self.center_x(), SCORE_FONT_SIZE)
+        self.canvas.coords(self.line, 0, self.line_y(), self.game_width, self.line_y())
+        self.canvas.coords(self.current_morse_display, self.center_x(), self.morse_display_y())
+        if self.x_mark:
+            self.canvas.coords(self.x_mark, self.center_x(), self.center_y())
+
+    def enable_resize_reset(self):
+        self.resize_reset_enabled = True
+
+    def on_canvas_configure(self, event):
+        if event.width == self.game_width and event.height == self.game_height:
+            return
+        self.game_width = max(1, event.width)
+        self.game_height = max(1, event.height)
+        self.layout_game_area()
+        if not self.resize_reset_enabled:
+            return
+        if self.resize_reset_id:
+            self.root.after_cancel(self.resize_reset_id)
+        self.resize_reset_id = self.root.after(RESIZE_RESET_DELAY, self.reset_after_resize)
+
+    def reset_after_resize(self):
+        self.resize_reset_id = None
+        self.restart()
 
     def generate_character(self):
         alphabet = random.choice(list(morse_code_dict.keys()))
         morse_code = morse_code_dict[alphabet]
-        char = Character(self.canvas, alphabet, morse_code)
+        char = Character(self.canvas, alphabet, morse_code, self.game_width)
         self.characters.append(char)
 
         interval = random.randint(CHARACTER_SPAWN_INTERVAL_MIN, CHARACTER_SPAWN_INTERVAL_MAX)
@@ -126,8 +173,8 @@ class Game:
 
     def update(self):
         for char in list(self.characters):
-            char.move()
-            if char.y > 700:
+            char.move(self.line_y())
+            if char.y > self.game_height:
                 self.canvas.delete(char.text_group[0])
                 self.canvas.delete(char.text_group[1])
                 self.characters.remove(char)
@@ -170,7 +217,7 @@ class Game:
     def show_x_mark(self):
         if self.x_mark:
             self.canvas.delete(self.x_mark)
-        self.x_mark = self.canvas.create_text(300, 350, text="×", font=("MS Gothic", 70), fill="red", anchor=tk.CENTER)
+        self.x_mark = self.canvas.create_text(self.center_x(), self.center_y(), text="×", font=("MS Gothic", 70), fill="red", anchor=tk.CENTER)
         self.root.after(1000, self.hide_x_mark)
 
     def hide_x_mark(self):
@@ -180,6 +227,8 @@ class Game:
 
     # リスタート関数
     def restart(self):
+        self.layout_game_area()
+
         # スコアをリセット
         self.score = 0
         self.canvas.itemconfig(self.score_text, text=f"Score: {self.score:03d}")
@@ -204,6 +253,6 @@ class Game:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    root.title("Morse Game")
+    root.title("CWGAME Ver.1.1")
     game = Game(root)
     root.mainloop()

@@ -1,5 +1,5 @@
 # *********************************************
-# CWGAME Ver.1.0 by JA1XPM 2026.05.17
+# CWGAME Ver.1.1 by JA1XPM 2026.05.17
 # *********************************************
 
 # Python
@@ -21,6 +21,9 @@ dist/
 
 # Logs
 *.log
+
+# Local archives
+*.zip
 
 # Editor settings
 .vscode/
